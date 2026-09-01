@@ -457,20 +457,26 @@ def _make_everystep_costs(xf, H, Q, R, Qf, n_a, sdim, cdim, pdim, eps,
         grad_x[:, H, :] = 2 * np.einsum('n,ij,nj->ni', self_weights, Qf, x[:, H, :] - xf)
         grad_u[:] = 2 * np.einsum('n,ij,ntj->nti', self_weights, R, u)
 
+        if not pairs:                       # a lone agent has no collision term
+            return grad_x, grad_u
+
         pd = pair_data(x, key)
-        for agent_i, agent_j in pairs:
-            _, z_worst = pd[(agent_i, agent_j)]
-            for N in range(1, H + 1):
-                zw = z_worst[N]
-                d = np.linalg.norm(zw)
-                if d < 1e-12:
-                    continue
-                # Pull the selected-coordinate gradient back through C.  For
-                # C = [I_p 0] this just writes into the position components, but
-                # it stays correct for a weighted C.
-                dcost_dz = C.T @ (collision_weight * distance_cost_grad_func(d) * zw / d)
-                grad_x[agent_i, N, :] += dcost_dz
-                grad_x[agent_j, N, :] -= dcost_dz
+        # Batched over pairs and prefixes at once.  The per-prefix Python loop
+        # this replaces was 78% of the gradient's cost at 4 agents, and it sits on
+        # SLSQP's hot path -- the adversary's own numba sweep is the cheap part.
+        # Step 0 is dropped: x[:, 0] is pinned to x0, so its cost is constant.
+        zw = np.stack([pd[p][1][1:] for p in pairs])            # (n_pairs, H, m)
+        d = np.linalg.norm(zw, axis=2)                          # (n_pairs, H)
+        safe = np.maximum(d, 1e-12)                             # guards d -> 0
+        coef = collision_weight * distance_cost_grad_func(safe)
+        # Multiply then divide, matching the scalar form it replaces exactly.
+        # The trailing `@ C` pulls the selected-coordinate gradient back through
+        # C, one row at a time: (v @ C) equals (C.T @ v).  For C = [I_p 0] this
+        # writes into the position components, and stays correct for a weighted C.
+        dcost_dz = ((coef[..., None] * zw) / safe[..., None]) @ C   # (n_pairs, H, sdim)
+        for q, (agent_i, agent_j) in enumerate(pairs):
+            grad_x[agent_i, 1:, :] += dcost_dz[q]
+            grad_x[agent_j, 1:, :] -= dcost_dz[q]
         return grad_x, grad_u
 
     return objective, gradient

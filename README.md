@@ -27,7 +27,7 @@ than twice the distortion for it.
 |---|---|---|---|
 | nominal | 0.706 | 0.258 | — |
 | wider | 1.162 | **0.762** | 0.516 |
-| strategically robust | 0.965 | 0.530 | **0.252** |
+| strategically robust | 0.965 | 0.529 | **0.252** |
 
 **Four agents.** With six interacting pairs the ordering reverses, and
 robustness wins on both axes at once — a larger worst-case margin for less than
@@ -57,24 +57,30 @@ apart under the worst case, effectively a contact, and the robust plan holds
 
 ### Runtime
 
-Median over 5 runs (3 at eight agents); CV ≤ 3.4% on every cell, and every cell's
+Median over 5 runs (3 at eight agents); CV ≤ 1.1% on every cell, and every cell's
 runs converged to a single optimum. The robust timing **includes its own nominal
 initialization**, so the ratio is the end-to-end cost of switching methods, not
 the marginal cost of the robust solve.
 
 | scenario | agents | nominal | wider | strategically robust |
 |---|---|---|---|---|
-| Head-on | 2 | 0.213 s | 0.239 s (1.12x) | 0.305 s (**1.43x**) |
-| Parallel | 2 | 0.061 s | 0.088 s (1.45x) | 0.103 s (**1.69x**) |
-| 4 agents | 4 | 0.902 s | 1.066 s (1.18x) | 1.699 s (**1.88x**) |
-| 8 agents | 8 | 41.66 s | 26.99 s (0.65x) | 52.00 s (**1.25x**) |
+| Head-on | 2 | 0.210 s | 0.237 s (1.13x) | 0.307 s (**1.46x**) |
+| Parallel | 2 | 0.061 s | 0.087 s (1.43x) | 0.101 s (**1.67x**) |
+| 4 agents | 4 | 0.897 s | 1.062 s (1.18x) | 1.721 s (**1.92x**) |
+| 8 agents | 8 | 42.43 s | 27.29 s (0.64x) | 52.39 s (**1.23x**) |
 
 Two things in that table are worth not glossing over. The robust overhead
-*shrinks* as the problem grows — 1.88x at four agents, 1.25x at eight — because
-the worst-case oracle costs O(pairs) while the nominal solve's own difficulty
-grows faster. And at eight agents the wider penalty is **faster than nominal**
-(0.65x): the stronger barrier conditions the problem better, converging in 85
-iterations against 131.
+*shrinks* as the problem grows — 1.92x at four agents, 1.23x at eight — and the
+reason is not that the adversary gets cheaper. Measured per SLSQP iteration, a
+robust step costs the same as a nominal one (1.0–1.1x), and the Appendix-B
+precompute is 0.2 ms at every scale. The ratio is almost exactly
+`1 + robust_iterations / nominal_iterations`, so it is high wherever the
+*nominal* problem is easy: parallel needs 9 nominal iterations against the
+robust solve's 6, while eight agents needs 131 against 32.
+
+And at eight agents the wider penalty is **faster than nominal** (0.64x): the
+stronger barrier conditions the problem better, converging in 85 iterations
+against 131.
 
 ### Single shooting
 
@@ -83,12 +89,22 @@ them at eight agents — and roughly halves the variable count:
 
 | solve | full space | single shooting | |
 |---|---|---|---|
-| nominal, 8 agents | 41.73 s | 2.11 s | 19.8x |
-| strategically robust, 8 agents | 10.31 s | 1.04 s | 9.9x |
+| nominal, 8 agents | 42.00 s | 2.10 s | 20.0x |
+| strategically robust, 8 agents | 10.21 s | 0.94 s | 10.9x |
 
 The two parameterizations start from different points and reach different local
 minima here (nominal objective 48.36 full-space against 36.69 shooting — shooting
 found the better one), so compare the objectives alongside the times.
+
+Shooting also changes what the robust *ratio* measures. In the full space, 96–100%
+of every SLSQP iteration is the constrained QP — a cost both methods pay
+identically — which hides the robust objective and gradient evaluation entirely
+(1.67 ms against 0.14 ms, inside a 42 ms iteration). Removing 336 constraints
+collapses the QP, and the evaluation becomes ~47% of a robust iteration. The
+robust ratio therefore *rises* under shooting even though both methods get ~10x
+faster in absolute terms: at four agents, 1.92x full-space against 1.93x
+shooting, and at two agents 1.67x against 2.02x on the parallel scenario. The
+full-space ratios are flattered by a large shared constant.
 
 ## Layout
 
