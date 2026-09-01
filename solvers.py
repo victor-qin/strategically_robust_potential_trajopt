@@ -199,8 +199,8 @@ def _dynamics_constraint(x0, A, B, H, n_a, sdim, cdim):
     Only the full-space solvers need this; shooting satisfies both by
     construction.  The Jacobian is constant -- the dynamics are linear, so the
     entries are built only from A, B and I -- and could be supplied once instead
-    of finite-differenced each iteration.  It is left to SLSQP here so the
-    constraint set matches the published runs.
+    of finite-differenced each iteration -- see the appendix of README.md.  It is
+    left to SLSQP here so the constraint set matches the published runs.
 
     Parameters
     ----------
@@ -409,7 +409,7 @@ def _make_everystep_costs(xf, H, Q, R, Qf, n_a, sdim, cdim, pdim, eps,
     objective.  Held fixed, dz_N no longer depends on z_N, giving
     d(z_worst)/d(z_N) = I -- the Riccati recursion is never differentiated
     through.  The derivation, and the I + P_N version that was wrong by order 10,
-    are in the `adversary` module docstring.
+    are in the appendix of README.md.
     """
     sigma_all, P_all = selected
     pairs = list(combinations(range(n_a), 2))
@@ -800,9 +800,8 @@ def optimize_everystep(x0, xf, A, B, H, Q, R, Qf, n_a, sdim, cdim, pdim, eps,
 
     Each pair's separation is evaluated after an adversary, given a fresh energy
     budget at every prefix of the horizon, has moved them as close together as it
-    can.  The `adversary` module docstring carries both the closed form and the
-    envelope-theorem argument for why the adversary's response never appears in
-    this solve's gradient.
+    can.  `adversary.py` holds the closed form; the appendix of README.md derives
+    why the adversary's response never appears in this solve's gradient.
 
     Warm-starting from a nominal solution is the intended use, and is what the
     paper's timings measure -- the robust runtime there includes its own nominal

@@ -461,8 +461,9 @@ pd.DataFrame([
 # %% [markdown]
 # ---
 #
-# **Where to go next.** The `adversary.py` module docstring carries both halves of
-# the method: the closed form for the worst case, and why the adversary's response
-# never appears in the gradient — the envelope theorem removes it, and an earlier
-# derivation that differentiated through the Riccati recursion was wrong by order
-# 10. The paper derives the first half (Appendix B) but not the second.
+# **Where to go next.** `adversary.py` documents the closed form for the worst
+# case. The appendix of `README.md` derives the other half — why the adversary's
+# response never appears in the gradient, since the envelope theorem removes it,
+# and how an earlier derivation that differentiated through the Riccati recursion
+# came out wrong by order 10. The paper gives the first half (Appendix B) but not
+# the second.

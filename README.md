@@ -138,11 +138,116 @@ returns the cost and its derivative together so the pair cannot be separated by
 accident.
 
 The paper derives the adversary's closed form (Appendix B) but not the gradient
-of the outer objective, which is the part that is easy to get wrong: the obvious
-route differentiates through the Riccati recursion, and the envelope theorem says
-not to. That derivation, and the earlier version of it that was wrong by order
-10, are in the `adversary.py` module docstring.
+of the outer objective, which is the part that is easy to get wrong. That
+derivation is below.
 
 ## License
 
 MIT. See `LICENSE`.
+
+---
+
+## Appendix: the outer gradient
+
+The paper gives the adversary's closed form in Appendix B, but not the gradient
+of the outer objective — the quantity SLSQP actually consumes. Section IV says
+only *"we provide the function and its gradient."* That gap is where the trap is,
+so the derivation is recorded here.
+
+### The inner problem
+
+For a pair $(i,j)$ and prefix length $N$, the adversary perturbs the relative
+dynamics with energy budget $\varepsilon$ to close the distance at step $N$.
+Write $z_N = x_{i,N} - x_{j,N}$ for the relative state, $G_N = \sum_{l<N} A^l B
+B^\top (A^\top)^l$ for the reachability Gramian, and $C$ for the selection matrix
+picking the collision-relevant components. Then
+
+$$
+C z^{\mathrm{worst}}_N \; = \; C z_N - \Gamma_N \left( \Gamma_N + \lambda_N I
+\right)^{-1} C z_N, \qquad \Gamma_N = C G_N C^\top,
+$$
+
+with $\lambda_N \ge 0$ fixed by the secular equation
+
+$$
+\sum_l \frac{\sigma_l \, w_l^2}{(\lambda_N + \sigma_l)^2} = \varepsilon^2 ,
+$$
+
+where $\sigma_l$ are the eigenvalues of $\Gamma_N$ and $w$ holds the coordinates
+of $C z_N$ in its eigenbasis. A root $\lambda_N > 0$ exists iff $\sum_l w_l^2 /
+\sigma_l > \varepsilon^2$; otherwise $\lambda_N = 0$ and the adversary reaches
+contact exactly. Implemented in `adversary.compute_selected_worst`.
+
+### Why the gradient does not differentiate through it
+
+The robust collision cost for that pair and prefix is $f(\lVert C
+z^{\mathrm{worst}}_N \rVert)$, and $z^{\mathrm{worst}}_N$ depends on $z_N$ through
+the inner optimization. It looks as though differentiating requires pushing
+through the whole recursion. It does not.
+
+At the optimal $\lambda_N$ the adversary's controls $\delta u^\star$ solve the
+inner problem, so they are stationary and may be **held fixed** when
+differentiating the outer objective — the envelope theorem. Held fixed:
+
+- $\delta z_N$ is determined entirely by propagating $\delta u^\star$ through the
+  dynamics,
+- so $\delta z_N$ does not depend on $z_N$,
+- so $\mathrm{d} z^{\mathrm{worst}}_N / \mathrm{d} z_N = I$.
+
+The gradient is therefore the *same formula as the nominal case*, evaluated at
+the worst-case position rather than the planned one. With $d_{\mathrm{worst}} =
+\lVert C z^{\mathrm{worst}}_N \rVert$,
+
+$$
+\frac{\partial f}{\partial x_{i,N}} = +\, f'(d_{\mathrm{worst}}) \,
+\frac{C z^{\mathrm{worst}}_N}{d_{\mathrm{worst}}}, \qquad
+\frac{\partial f}{\partial x_{j,N}} = -\, f'(d_{\mathrm{worst}}) \,
+\frac{C z^{\mathrm{worst}}_N}{d_{\mathrm{worst}}} .
+$$
+
+`solvers._make_everystep_costs` writes the pullback as `C.T @ (...)`, which for
+$C = [\, I_p \;\; 0 \,]$ fills the position components and stays correct for a
+weighted $C$.
+
+### The pitfall
+
+An earlier derivation used $\mathrm{d} z^{\mathrm{worst}}_N / \mathrm{d} z_N = I
++ P_N$, where $P_N$ is the Jacobian of the recursion mapping $z_N$ to $\delta
+z_N$ — unrelated to the eigenvectors above. That is the **total** derivative: it
+accounts for $\delta u^\star$ moving as $z_N$ moves. The envelope theorem calls
+for the **partial** derivative at fixed $\delta u^\star$, which is $I$.
+
+The difference is not subtle. Against finite differences the $I + P_N$ gradient
+was wrong by order 10; the corrected one agrees to $\sim\!10^{-7}$.
+
+### Verification
+
+Both gradients were checked against `scipy.optimize.approx_fprime` at the
+converged solution. Effect on the 2-agent head-on scenario:
+
+| solver | finite difference | analytic gradient |
+|---|---|---|
+| nominal | 4963 function evals | **47** |
+| strategically robust | 6123 function evals | **23** |
+
+Both modes reach the same objective on this scenario (73.3080 and 116.4260). On
+the larger ones they do not — which is why `benchmark_tables.py` insists on
+analytic gradients for every method it times.
+
+### Constraint Jacobian
+
+Not currently supplied, but the saving is real and the derivation is short. The
+dynamics constraints are linear in $z$, so their Jacobian is constant:
+
+$$
+\frac{\partial c_{\mathrm{IC}}}{\partial x_{i,0}} = I, \qquad
+\frac{\partial c_{\mathrm{dyn}}}{\partial x_{i,t+1}} = I, \qquad
+\frac{\partial c_{\mathrm{dyn}}}{\partial x_{i,t}} = -A, \qquad
+\frac{\partial c_{\mathrm{dyn}}}{\partial u_{i,t}} = -B,
+$$
+
+and zero elsewhere — block-diagonal per agent, since agents are dynamically
+independent and couple only through the objective. `_dynamics_constraint` passes
+`fun` alone, so SLSQP finite-differences this at every iteration. The
+single-shooting solvers sidestep the question entirely: rolling the dynamics
+forward removes these constraints rather than differentiating them.

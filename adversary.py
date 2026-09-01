@@ -27,48 +27,10 @@ Gamma_N.  Two consequences drive the runtime numbers:
   solve per pair per step.  No forward pass over the adversary's controls is
   needed.
 
-WHY THE OUTER GRADIENT DOES NOT DIFFERENTIATE THROUGH ANY OF THIS
-
-The paper derives the map above but not the gradient of the outer objective,
-which is what SLSQP actually consumes.  The step is short and the obvious route
-through it is wrong, so it is recorded here.
-
-The robust collision cost for a pair at prefix N is f(||C z_worst_N||), and
-z_worst_N depends on z_N through the inner optimization.  It looks as though
-differentiating requires pushing through the whole recursion.  It does not.
-
-At the optimal lambda_N the adversary's controls delta_u* solve the inner
-problem, so they are stationary and may be held fixed when differentiating the
-outer objective -- the envelope theorem.  Held fixed:
-
-* delta_z_N is determined entirely by propagating delta_u* through the dynamics,
-* so delta_z_N does not depend on z_N,
-* so d(z_worst_N) / d(z_N) = I.
-
-The gradient is therefore the same formula as the nominal case, evaluated at the
-worst-case position rather than the planned one:
-
-    df/dz_N         = f'(d_worst) * C z_worst_N / d_worst
-    df/dx[i,N,:pdim] = +f'(d_worst) * C z_worst_N / d_worst
-    df/dx[j,N,:pdim] = -f'(d_worst) * C z_worst_N / d_worst
-
-`solvers._make_everystep_costs` writes the pullback as `C.T @ (...)`, which for
-C = [I_p  0] fills the position components and stays correct for a weighted C.
-
-THE PITFALL.  An earlier derivation used d(z_worst)/d(z_N) = I + P_N, with P_N
-the Jacobian of the recursion mapping z_N to delta_z_N.  That is the *total*
-derivative: it accounts for delta_u* moving as z_N moves.  The envelope theorem
-calls for the *partial* derivative at fixed delta_u*, which is I.  The
-difference is not subtle -- against finite differences the I + P_N gradient was
-wrong by order 10, while the corrected one agrees to ~1e-7.
-
-VERIFICATION.  Both the nominal and the robust gradient were checked against
-`scipy.optimize.approx_fprime` at the converged solution and agree to ~1e-7
-relative error.  On the 2-agent head-on scenario, supplying them takes the
-nominal solve from 4963 function evaluations to 47 and the robust solve from
-6123 to 23.  Both modes reach the same objective there (73.3080 and 116.4260);
-on the larger scenarios they do not, which is why `benchmark_tables.py` insists
-on analytic gradients for every method it times.
+The gradient of the outer objective does not differentiate through this map at
+all: by the envelope theorem the adversary's response is held fixed, giving
+d(z_worst_N)/d(z_N) = I.  The derivation, and the version of it that was wrong by
+order 10, are in the appendix of README.md.
 
 This module is numerics only: it imports numpy and numba and nothing else, so
 the solver can run headless with no plotting stack installed.
