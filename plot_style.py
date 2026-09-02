@@ -10,11 +10,11 @@ import matplotlib.pyplot as plt
 STYLE = {
     'font.family': 'serif',
     'font.serif': ['Times', 'Times New Roman', 'Computer Modern Roman'],
-    'font.size': 10,
-    'axes.labelsize': 12,
-    'axes.titlesize': 12,
-    'legend.fontsize': 10,
-    'xtick.labelsize': 10,
+    'font.size': 12,
+    'axes.labelsize': 14,
+    'axes.titlesize': 14,
+    'legend.fontsize': 14,
+    'xtick.labelsize': 10,      # ticks stay small; everything else is larger
     'ytick.labelsize': 10,
     'lines.linewidth': 1.5,
     'text.usetex': False,

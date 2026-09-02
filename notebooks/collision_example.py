@@ -21,9 +21,15 @@
 # places, and buy different amounts of worst-case margin per unit of deviation
 # from the nominal plan.
 #
-# **Runtime.** About 12 minutes end to end. The 8-agent scenario dominates: its
-# nominal solve alone takes ~45 s, and the timing section repeats it. `BENCH_RUNS`
-# and `BENCH_RUNS_8` below control how many repetitions that section takes.
+# **Solver.** Everything below is solved by **single shooting** — over the
+# controls alone, with states recovered by rolling the dynamics forward. That
+# removes every equality constraint and roughly halves the variable count. On the
+# two smaller scenarios it reaches the same optima as the full-space solver to
+# every digit shown here, about 10x faster; at eight agents it finds a *better*
+# one. Section 11 compares the two directly.
+#
+# **Runtime.** Two to three minutes end to end. `BENCH_RUNS` and `BENCH_RUNS_8`
+# below control how many repetitions the timing section takes.
 
 # %% [markdown]
 # ## 0. Setup
@@ -121,8 +127,9 @@ xf = np.array([[2.0, 1.0], [0.0, 1.1]])
 
 problem = (x0, xf, A, B, H, Q, R, Qf, n_a, sdim, cdim, pdim)
 print(f'{n_a} agents, H = {H}, dt = {dt}, eps = {eps}')
-print(f'decision variables: {n_a * (H + 1) * sdim + n_a * H * cdim}, '
-      f'equality constraints: {n_a * sdim + n_a * H * sdim}')
+print(f'full space:      {n_a * (H + 1) * sdim + n_a * H * cdim} variables, '
+      f'{n_a * sdim + n_a * H * sdim} equality constraints')
+print(f'single shooting: {n_a * H * cdim} variables, 0 equality constraints')
 
 # %% [markdown]
 # ### The three solves
@@ -134,19 +141,20 @@ print(f'decision variables: {n_a * (H + 1) * sdim + n_a * H * cdim}, '
 import time
 
 t0 = time.perf_counter()
-res_nominal = optimize_optimal(*problem, cost_nominal, distance_cost_grad_func=grad_nominal)
+res_nominal = optimize_optimal_shooting(*problem, cost_nominal,
+                                        distance_cost_grad_func=grad_nominal)
 t_nominal = time.perf_counter() - t0
 x_nom, u_nom = split_solution(res_nominal, n_a, H, sdim, cdim)
 
 t0 = time.perf_counter()
-res_wider = optimize_optimal(*problem, cost_wider, distance_cost_grad_func=grad_wider,
-                             x_opt=x_nom, u_opt=u_nom)
+res_wider = optimize_optimal_shooting(*problem, cost_wider,
+                                      distance_cost_grad_func=grad_wider, u_opt=u_nom)
 t_wider = time.perf_counter() - t0
 
 t0 = time.perf_counter()
-res_robust = optimize_everystep(*problem, eps, cost_nominal,
-                                distance_cost_grad_func=grad_nominal,
-                                x_opt=x_nom, u_opt=u_nom)
+res_robust = optimize_everystep_shooting(*problem, eps, cost_nominal,
+                                         distance_cost_grad_func=grad_nominal,
+                                         u_opt=u_nom)
 t_robust = time.perf_counter() - t0
 
 RESULTS = [res_nominal, res_wider, res_robust]
@@ -244,7 +252,7 @@ trade
 # dominance. On this scenario the wider penalty buys *more* absolute worst-case
 # margin than robustness does — and pays more than twice the path deviation for
 # it. Per unit of distortion the two land within about 10% of each other, and
-# section 7 shows the ordering is not even stable across scenarios.
+# section 8 shows the ordering is not even stable across scenarios.
 #
 # What does not trade away is where the number comes from. Wider's margin is set
 # by $c_1$, a tuning constant with no operational meaning: nothing tells you which
@@ -267,7 +275,85 @@ plt.close(fig)
 display(Image(filename=str(FIGDIR / 'headon_animation.gif')))
 
 # %% [markdown]
-# ## 7. Four agents
+# ## 7. Parallel: a conflict the nominal plan never sees
+#
+# The head-on case forces the issue — the two straight-line plans intersect, so
+# the nominal solver has to resolve a conflict whether or not anyone is robust.
+# The parallel case is the opposite, and it is the more revealing of the two.
+#
+# Both agents travel the same direction, two apart, and never approach. The
+# nominal solve converges in a handful of iterations and the log barrier is
+# essentially inactive: there is nothing to avoid. Then give the adversary a
+# budget, and a conflict appears that the nominal planner had no reason to
+# anticipate.
+
+# %%
+x0_par = np.array([[0.0, 0.0], [2.0, 0.0]])
+xf_par = np.array([[0.0, 3.0], [2.0, 3.0]])
+problem_par = (x0_par, xf_par, A, B, H, Q, R, Qf, n_a, sdim, cdim, pdim)
+
+res_par_nominal = optimize_optimal_shooting(*problem_par, cost_nominal,
+                                            distance_cost_grad_func=grad_nominal)
+x_par_nom, u_par_nom = split_solution(res_par_nominal, n_a, H, sdim, cdim)
+res_par_wider = optimize_optimal_shooting(*problem_par, cost_wider,
+                                          distance_cost_grad_func=grad_wider,
+                                          u_opt=u_par_nom)
+res_par_robust = optimize_everystep_shooting(*problem_par, eps, cost_nominal,
+                                             distance_cost_grad_func=grad_nominal,
+                                             u_opt=u_par_nom)
+RESULTS_PAR = [res_par_nominal, res_par_wider, res_par_robust]
+
+plotting.plot_trajectories(res_par_nominal, [res_par_robust, res_par_wider],
+                           n_a, H, sdim, cdim, xf_par,
+                           method_labels=['nominal', 'strat. robust', 'wider'],
+                           save_path=FIGDIR / 'parallel_trajectories.png')
+plt.show()
+
+# %%
+plotting.plot_avg_distances(RESULTS_PAR, LABELS, n_a, H, sdim, cdim, pdim, eps, A, B, dt,
+                            save_path=FIGDIR / 'parallel_separation.png')
+plt.show()
+
+sep_par = pd.DataFrame(plotting.min_separation_table(
+    RESULTS_PAR, LABELS, n_a, H, sdim, cdim, pdim, eps, A, B)).set_index('method')
+sep_par['path deviation'] = [
+    bench.integrated_path_deviation(split_solution(r, n_a, H, sdim, cdim)[0],
+                                    x_par_nom, dt, pdim) for r in RESULTS_PAR]
+gain_par = (sep_par['min separation, worst case']
+            - sep_par.loc['nominal', 'min separation, worst case'])
+sep_par['worst-case gain'] = gain_par
+sep_par['gain per unit deviation'] = (
+    gain_par / sep_par['path deviation']).replace([np.inf, -np.inf], np.nan)
+sep_par
+
+# %% [markdown]
+# Read the nominal row against the head-on one in section 4. There the plans
+# crossed and the nominal solve was pushed down to a closest approach well under
+# one; here it stays at 2.0, the separation it started with, because the barrier
+# never engages. The nominal solve is *easy* — and the worst case still takes a
+# large bite out of that margin.
+#
+# Note that the `min separation` column is identical for all three methods: the
+# agents travel in parallel and stay exactly their starting distance apart no
+# matter what. Every difference between the methods lives in the worst-case
+# column, which is the whole argument in one table.
+#
+# The nominal planner is not being careless — by its own model there is no
+# conflict here at all. The margin only disappears once another agent is allowed
+# to deviate, which is exactly the uncertainty the nominal formulation has no way
+# to express.
+#
+# This is also where the efficiency gap is widest. Compare the last column
+# against the same figure for the head-on case in section 5: the wider penalty
+# again buys more absolute margin, and again pays several times over for it, but
+# here the ratio between the two is far larger than the ~10% seen head-on.
+#
+# It is also why the parallel row carries one of the highest runtime ratios in
+# section 10: the ratio is `1 + robust_iterations / nominal_iterations`, and the
+# denominator is small precisely because the nominal problem is so easy.
+
+# %% [markdown]
+# ## 8. Four agents
 #
 # Six pairs instead of one, and the interaction is no longer a single crossing:
 # agents must resolve conflicts with several neighbours at once. Everything below
@@ -279,17 +365,20 @@ x0_4 = np.array([[0.0, 1.5], [1.0, 0.0], [1.0, 3.0], [3.0, 0.5]])
 xf_4 = np.array([[3.0, 1.5], [2.0, 2.5], [2.0, 1.0], [1.0, 2.5]])
 problem4 = (x0_4, xf_4, A, B, H, Q, R, Qf, n_a4, sdim, cdim, pdim)
 
-res4_nominal = optimize_optimal(*problem4, cost_nominal, distance_cost_grad_func=grad_nominal)
+res4_nominal = optimize_optimal_shooting(*problem4, cost_nominal,
+                                         distance_cost_grad_func=grad_nominal)
 x4_nom, u4_nom = split_solution(res4_nominal, n_a4, H, sdim, cdim)
-res4_wider = optimize_optimal(*problem4, cost_wider, distance_cost_grad_func=grad_wider,
-                              x_opt=x4_nom, u_opt=u4_nom)
-res4_robust = optimize_everystep(*problem4, eps, cost_nominal,
-                                 distance_cost_grad_func=grad_nominal,
-                                 x_opt=x4_nom, u_opt=u4_nom)
+res4_wider = optimize_optimal_shooting(*problem4, cost_wider,
+                                       distance_cost_grad_func=grad_wider, u_opt=u4_nom)
+res4_robust = optimize_everystep_shooting(*problem4, eps, cost_nominal,
+                                          distance_cost_grad_func=grad_nominal,
+                                          u_opt=u4_nom)
 RESULTS4 = [res4_nominal, res4_wider, res4_robust]
 
-plotting.plot_trajectories(res4_nominal, [res4_robust, res4_wider], n_a4, H, sdim, cdim, xf_4,
-                           method_labels=['nominal', 'strat. robust', 'wider'],
+# Only nominal and robust are drawn: at four agents the wider curves add twelve
+# more lines without adding to the comparison, which the tables below carry.
+plotting.plot_trajectories(res4_nominal, [res4_robust], n_a4, H, sdim, cdim, xf_4,
+                           method_labels=['nominal', 'strat. robust'],
                            save_path=FIGDIR / '4agent_trajectories.png')
 plt.show()
 
@@ -318,16 +407,16 @@ pd.DataFrame(plotting.min_separation_table(
 # actually attack.
 
 # %% [markdown]
-# ## 8. Eight agents on a circle
+# ## 9. Eight agents on a circle
 #
 # The stress case: eight agents evenly spaced on a circle of radius 2, each
 # heading to the diametrically opposite point. Every straight-line plan passes
 # through the centre, so all 28 pairs conflict at once and the nominal solve has
 # to find a rotation for the whole formation.
 #
-# This is the slowest cell in the notebook (~45 s for the nominal solve). Note
-# how the cost distributes: the robust solve, warm-started, is *faster* than the
-# nominal one it starts from.
+# Note how the cost distributes: the robust solve, warm-started, is *faster* than
+# the nominal one it starts from. Under the full-space solver this cell took ~55 s;
+# by shooting it takes about three.
 
 # %%
 n_a8 = 8
@@ -338,14 +427,15 @@ xf_8 = np.array([centre - radius * np.array([np.cos(a), np.sin(a)]) for a in ang
 problem8 = (x0_8, xf_8, A, B, H, Q, R, Qf, n_a8, sdim, cdim, pdim)
 
 t0 = time.perf_counter()
-res8_nominal = optimize_optimal(*problem8, cost_nominal, distance_cost_grad_func=grad_nominal)
+res8_nominal = optimize_optimal_shooting(*problem8, cost_nominal,
+                                         distance_cost_grad_func=grad_nominal)
 t8_nominal = time.perf_counter() - t0
 x8_nom, u8_nom = split_solution(res8_nominal, n_a8, H, sdim, cdim)
 
 t0 = time.perf_counter()
-res8_robust = optimize_everystep(*problem8, eps, cost_nominal,
-                                 distance_cost_grad_func=grad_nominal,
-                                 x_opt=x8_nom, u_opt=u8_nom)
+res8_robust = optimize_everystep_shooting(*problem8, eps, cost_nominal,
+                                          distance_cost_grad_func=grad_nominal,
+                                          u_opt=u8_nom)
 t8_robust = time.perf_counter() - t0
 
 print(f'nominal: {t8_nominal:6.2f}s   robust (warm-started): {t8_robust:6.2f}s')
@@ -367,7 +457,7 @@ pd.DataFrame(plotting.min_separation_table(
     n_a8, H, sdim, cdim, pdim, eps, A, B)).set_index('method')
 
 # %% [markdown]
-# ## 9. Runtime
+# ## 10. Runtime
 #
 # `benchmark_tables.py` produces the paper's timing tables and is importable, so
 # the same code runs here and on a headless box. Three conventions in it are
@@ -387,8 +477,17 @@ pd.DataFrame(plotting.min_separation_table(
 # The robust timing includes its own nominal initialization, so the ratio is the
 # honest end-to-end cost of switching methods, not the marginal cost of the
 # robust solve alone.
+#
+# `USE_SHOOTING` switches every row to the same parameterization the rest of this
+# notebook uses. Expect *higher* ratios than the full-space table in the README,
+# and that is the more honest measurement: in the full space 96-100% of every
+# SLSQP iteration is the constrained QP, a cost both methods pay identically,
+# which hides the robust objective and gradient evaluation almost entirely.
+# Shooting removes the QP and the difference becomes visible.
 
 # %%
+bench.USE_SHOOTING = True
+
 results_bench = [bench.run_scenario(name, BENCH_RUNS, verbose=False)
                  for name in ('Head-on', 'Parallel', '4 agents')]
 results_bench.append(bench.run_scenario('8 agents', BENCH_RUNS_8, verbose=False))
@@ -422,41 +521,101 @@ runtime
 print(bench.format_tables(results_bench, stat='median'))
 
 # %% [markdown]
-# ## 10. Single shooting
+# ## 11. What the full space would have given
 #
-# The same problems can be solved over the controls alone, recovering states by
-# rolling the dynamics forward. That eliminates every equality constraint —
-# 336 of them at 8 agents — and roughly halves the variable count.
+# Everything above used single shooting. The alternative keeps $x$ and $u$ as
+# decision variables and enforces the dynamics as equality constraints — 336 of
+# them at eight agents, on top of twice the variables.
 #
-# The two parameterizations do not start from the same point: the full-space
-# default guess interpolates $x$ linearly with $u = 0$, a pair its own dynamics
-# do not produce, and shooting cannot represent an inconsistent start. On the
-# harder scenarios that is enough to reach a different local minimum, so the
-# objectives are worth comparing alongside the times.
+# The two do not start from the same point: the full-space default guess
+# interpolates $x$ linearly with $u = 0$, a pair its own dynamics do not produce,
+# and shooting cannot represent an inconsistent start. On the smaller scenarios
+# they converge to the same optimum anyway. At eight agents they do not, and it
+# is shooting that finds the better one — so compare objectives alongside times.
 
 # %%
 t0 = time.perf_counter()
-res8_nominal_s = optimize_optimal_shooting(*problem8, cost_nominal,
-                                           distance_cost_grad_func=grad_nominal)
-t8_nominal_s = time.perf_counter() - t0
-_, u8_nom_s = split_solution(res8_nominal_s, n_a8, H, sdim, cdim)
+res8_nominal_f = optimize_optimal(*problem8, cost_nominal,
+                                  distance_cost_grad_func=grad_nominal)
+t8_nominal_f = time.perf_counter() - t0
+x8_nom_f, u8_nom_f = split_solution(res8_nominal_f, n_a8, H, sdim, cdim)
 
 t0 = time.perf_counter()
-res8_robust_s = optimize_everystep_shooting(*problem8, eps, cost_nominal,
-                                            distance_cost_grad_func=grad_nominal,
-                                            u_opt=u8_nom_s)
-t8_robust_s = time.perf_counter() - t0
+res8_robust_f = optimize_everystep(*problem8, eps, cost_nominal,
+                                   distance_cost_grad_func=grad_nominal,
+                                   x_opt=x8_nom_f, u_opt=u8_nom_f)
+t8_robust_f = time.perf_counter() - t0
 
 pd.DataFrame([
-    {'method': 'nominal', 'parameterization': 'full space',
-     'seconds': t8_nominal, 'objective': res8_nominal.fun, 'iterations': res8_nominal.nit},
     {'method': 'nominal', 'parameterization': 'single shooting',
-     'seconds': t8_nominal_s, 'objective': res8_nominal_s.fun, 'iterations': res8_nominal_s.nit},
-    {'method': 'strat. robust', 'parameterization': 'full space',
-     'seconds': t8_robust, 'objective': res8_robust.fun, 'iterations': res8_robust.nit},
+     'seconds': t8_nominal, 'objective': res8_nominal.fun, 'iterations': res8_nominal.nit},
+    {'method': 'nominal', 'parameterization': 'full space',
+     'seconds': t8_nominal_f, 'objective': res8_nominal_f.fun, 'iterations': res8_nominal_f.nit},
     {'method': 'strat. robust', 'parameterization': 'single shooting',
-     'seconds': t8_robust_s, 'objective': res8_robust_s.fun, 'iterations': res8_robust_s.nit},
+     'seconds': t8_robust, 'objective': res8_robust.fun, 'iterations': res8_robust.nit},
+    {'method': 'strat. robust', 'parameterization': 'full space',
+     'seconds': t8_robust_f, 'objective': res8_robust_f.fun, 'iterations': res8_robust_f.nit},
 ]).set_index(['method', 'parameterization'])
+
+# %% [markdown]
+# The full-space nominal solve stops at a worse optimum (higher objective) and
+# takes an order of magnitude longer to get there. Its robust solve inherits that
+# start, which is why the worst-case margin in section 9 is better than the
+# full-space figures quoted in the README.
+
+# %% [markdown]
+# ## 12. An alternative encoding
+#
+# Every figure above uses color for the agent and dash pattern for the method,
+# with the eight agent colors collapsed into one "agents" swatch so the legend
+# stays at three entries. That keeps individual trajectories followable while
+# spending almost no legend on them.
+#
+# The alternative gives up agent identity entirely: one color per **method**,
+# all agents pooled into it. Nothing here argues about a particular agent, so
+# little is lost, and the two bundles land in direct contrast rather than asking
+# the reader to separate dash patterns inside eight hues. Which one is better
+# depends on whether a reader ever needs to trace a single agent's path.
+
+# %%
+plotting.plot_trajectories_by_method(
+    [res8_nominal, res8_robust], ['nominal', 'strategically robust'],
+    n_a8, H, sdim, cdim, xf_8,
+    save_path=FIGDIR / '8agent_bundle.png')
+plt.show()
+
+# %% [markdown]
+# Either encoding shows the robust bundle sitting outside the nominal one. The
+# numbers below say how far, and how evenly — computed rather than quoted, since
+# they move whenever the solver or its parameterization does.
+
+# %%
+centre = np.array([2.0, 2.0])
+x8_rob = split_solution(res8_robust, n_a8, H, sdim, cdim)[0]
+res8_wider = optimize_optimal_shooting(*problem8, cost_wider,
+                                       distance_cost_grad_func=grad_wider, u_opt=u8_nom)
+x8_wide = split_solution(res8_wider, n_a8, H, sdim, cdim)[0]
+
+def per_agent_deviation(x):
+    return np.array([bench.integrated_path_deviation(x[i:i + 1], x8_nom[i:i + 1], dt, pdim)
+                     for i in range(n_a8)])
+
+closest = lambda x: np.linalg.norm(x[:, :, :pdim] - centre, axis=2).min(axis=1)
+dev_rob, dev_wide = per_agent_deviation(x8_rob), per_agent_deviation(x8_wide)
+near_nom, near_rob = closest(x8_nom), closest(x8_rob)
+
+print(f'agents ending further from the centre : {(near_rob > near_nom).sum()} of {n_a8}')
+print(f'mean closest approach to the centre   : {near_nom.mean():.2f} -> {near_rob.mean():.2f}')
+print(f'robust per-agent deviation            : {dev_rob.min():.2f} to {dev_rob.max():.2f}'
+      f'  ({dev_rob.max() / dev_rob.min():.1f}x spread)')
+print(f'mean deviation, robust vs wider       : {dev_rob.mean():.2f} vs {dev_wide.mean():.2f}')
+
+# %% [markdown]
+# Two things to read off that. The robust solve pushes most of the formation
+# away from the centre, but *not uniformly* — the per-agent spread is several
+# fold, so it redistributes the formation rather than simply inflating it. And it
+# is cheap in distortion: its mean per-agent deviation is a fraction of what the
+# wider penalty spends to buy a smaller worst-case margin.
 
 # %% [markdown]
 # ---
