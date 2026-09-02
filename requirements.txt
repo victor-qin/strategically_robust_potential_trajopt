@@ -1,0 +1,34 @@
+# strategically_robust_potential_trajopt -- portable runtime environment
+#
+#   python -m venv .venv && source .venv/bin/activate
+#   pip install -r requirements.txt
+#   python benchmark_tables.py --runs 30
+#
+# Verified by building a clean venv from this file and reproducing the paper's
+# 2-agent head-on objectives (73.308 nominal / 116.426 robust) and path
+# deviations (0.5159 wider / 0.2523 robust).
+#
+# Note: `pip freeze` inside a conda env emits `@ file:///...` paths that are not
+# installable elsewhere -- these pins were taken from `pip list` instead.  For an
+# exact lock, run `pip freeze` inside a venv built from this file (NOT inside a
+# conda env, which produces unusable paths).
+#
+# Python 3.10 or 3.11.  All core pins below have cp310 and cp311 wheels.
+# numba 0.63 has no wheels for 3.13+, and the numba kernel in adversary.py is on
+# the hot path, so do not go past 3.12.
+
+# --- core solver -----------------------------------------------------------
+# numba 0.63.1 supports numpy <2.3 only (numba.np.numpy_support.numpy_version
+# reports (2, 2)).  Do NOT relax the numpy pin without bumping numba, or
+# `import numba` fails at load time.
+numpy==2.2.5
+scipy==1.15.2
+numba==0.63.1
+llvmlite==0.46.0
+
+# --- notebooks and figures (NOT required by the solver) --------------------
+# Unlike the repo this was extracted from, solvers.py and adversary.py no longer
+# import matplotlib -- plotting lives in plotting.py, which the solver never
+# touches.  benchmark_tables.py therefore runs headless with only the pins above.
+# Install these to regenerate figures or run the notebook:
+#   pip install -r requirements.txt -r requirements-notebook.txt

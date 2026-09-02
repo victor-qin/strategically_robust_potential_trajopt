@@ -1,0 +1,13 @@
+# Figure and notebook extras -- NOT needed to run benchmark_tables.py, which
+# imports neither matplotlib nor pandas.
+#
+#   pip install -r requirements.txt -r requirements-notebook.txt
+#
+# Ranges rather than exact pins: pandas 3.x and ipython 9.x require Python
+# >=3.11, so a 3.10 box resolves to the 2.x / 8.x lines instead.  These only
+# draw figures and render tables, so the version affects no measured number.
+matplotlib>=3.8,<4
+pandas>=2.2,<4
+ipykernel>=6.29
+ipython>=8.18
+pillow>=10.0          # matplotlib's GIF writer for the trajectory animations

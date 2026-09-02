@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+.DS_Store
+.vscode/
+.ipynb_checkpoints/
+.venv/
+docs/
+
+# Figures are generated into figures/ and tracked there.  Anything a helper
+# drops in the repo root is a stray from an interactive session.
+/*.png
+/*.gif
+
+root.pdf
