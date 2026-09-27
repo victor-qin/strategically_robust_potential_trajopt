@@ -367,6 +367,77 @@ def _legend_within_axes(ax, handles, labels, ncol, handlelength, reorder=True,
     return ax.legend(handles, labels, ncol=1, handlelength=handlelength, **kw)
 
 
+def legend_right(ax, handles=None, labels=None, widen=True, gap=0.03, **kw):
+    """Put the legend outside the right edge of the axes, where it cannot cover data.
+
+    An in-axes legend has to find empty space among the curves, and with several
+    long entries there is none.  Outside the box it never overlaps the data.
+
+    Parameters
+    ----------
+    ax : matplotlib Axes
+    handles, labels : list, optional
+        As for `Axes.legend`.  Taken from the labelled artists when omitted.
+    widen : bool
+        Grow the figure by the legend's width, then re-run `tight_layout`, so the
+        axes keep the size they had.  Without this the legend's width comes out
+        of the plot area.  Pass False when `ax` is one panel of a layout the
+        caller owns.
+    gap : float
+        Space between the axes and the legend, as a fraction of the axes width.
+    **kw
+        Forwarded to `Axes.legend`.
+
+    Returns
+    -------
+    legend : matplotlib Legend
+    """
+    if handles is None:
+        handles, labels = ax.get_legend_handles_labels()
+    kw = {'frameon': False, 'borderaxespad': 0.0, **kw}
+    leg = ax.legend(handles, labels, loc='upper left', bbox_to_anchor=(1.0 + gap, 1.0), **kw)
+    if widen:
+        fig = ax.figure
+        fig.canvas.draw()
+        extra = (leg.get_window_extent().width
+                 + gap * ax.get_window_extent().width) / fig.dpi
+        w, h = fig.get_size_inches()
+        fig.set_size_inches(w + extra, h)
+        fig.tight_layout()
+    return leg
+
+
+def _method_style_legend(ax, labels, styles, widen):
+    """Side legend that keys color to method and line style to what is drawn.
+
+    Labelling every curve would list each method-style pair ("wider, worst
+    case", ...), six long entries for three methods.  Keying the two encodings
+    separately needs one entry per method plus one per style, all of them short.
+
+    Parameters
+    ----------
+    ax : matplotlib Axes
+    labels : list of str
+        Method names, in palette order.
+    styles : list of (dict, str)
+        Line keyword arguments and a label for each style drawn, e.g. solid for
+        the plan and dashed for the worst case.
+    widen : bool
+        Forwarded to `legend_right`.
+
+    Returns
+    -------
+    legend : matplotlib Legend
+    """
+    methods = [Line2D([0], [0], color=plot_style.agent_color(k), lw=2.4)
+               for k in range(len(labels))]
+    spacer = Line2D([], [], linestyle='none')
+    keys = [Line2D([0], [0], color='0.35', **style) for style, _ in styles]
+    return legend_right(ax, methods + [spacer] + keys,
+                        list(labels) + [''] + [name for _, name in styles],
+                        widen=widen)
+
+
 # ---------------------------------------------------------------------------
 # Trajectories in the plane
 # ---------------------------------------------------------------------------
@@ -832,17 +903,16 @@ def plot_avg_distances(results, labels, n_a, H, sdim, cdim, pdim, eps, A, B, dt,
     fig, ax = (plt.subplots(figsize=(PANEL * 1.4, PANEL))
                if own_fig else (ax.figure, ax))
 
-    for k, (res, label) in enumerate(zip(results, labels)):
+    for k, res in enumerate(results):
         x = split_solution(res, n_a, H, sdim, cdim)[0]
         color = plot_style.agent_color(k)
         if show_nominal:
             ax.plot(t, pairwise_distances(x, pdim)[0].mean(axis=0), '-o',
-                    color=color, markersize=3, label=label,
+                    color=color, markersize=3,
                     **{k_: v for k_, v in plot_style.method_style(0).items()
                        if k_ != 'linestyle'})
         wc = worst_case_distances(x, A, B, H, sdim, pdim, eps)[0].mean(axis=0)
         ax.plot(t, wc, color=color, marker='^', markersize=3, alpha=0.75,
-                label=f'{label}, worst case',
                 **{k_: v for k_, v in plot_style.method_style(1).items()
                    if k_ != 'alpha'})
 
@@ -850,9 +920,13 @@ def plot_avg_distances(results, labels, n_a, H, sdim, cdim, pdim, eps, A, B, dt,
     ax.set_ylabel('mean pairwise separation')
     ax.grid(True, linewidth=0.3, alpha=0.3)
     ax.tick_params(direction='in', top=True, right=True)
-    ax.legend(frameon=False)
     if own_fig:
         fig.tight_layout()
+    planned = dict(linestyle='-', marker='o', markersize=3, linewidth=1.8)
+    worst = dict(linestyle=plot_style.method_style(1)['linestyle'], marker='^',
+                 markersize=3, linewidth=1.5)
+    styles = ([(planned, 'as planned')] if show_nominal else []) + [(worst, 'worst case')]
+    _method_style_legend(ax, labels, styles, widen=own_fig)
     _save(fig, save_path)
     return ax
 
@@ -938,25 +1012,30 @@ def plot_relative_trajectory(results, labels, n_a, H, sdim, cdim, pdim, eps, A, 
     own_fig = ax is None
     fig, ax = plt.subplots(figsize=(PANEL, PANEL)) if own_fig else (ax.figure, ax)
 
-    for k, (res, label) in enumerate(zip(results, labels)):
+    for k, res in enumerate(results):
         x = split_solution(res, n_a, H, sdim, cdim)[0]
         z = x[i, :, :pdim] - x[j, :, :pdim]
         zw = worst_case_relative(x[i], x[j], C, selected, eps, H)[0]
         color = plot_style.agent_color(k)
         worst_style = {**plot_style.method_style(1), 'alpha': 0.55}
-        ax.plot(z[:, 0], z[:, 1], color=color, label=label, **plot_style.method_style(0))
-        ax.plot(zw[:, 0], zw[:, 1], color=color,
-                label=f'{label}, worst case', **worst_style)
+        ax.plot(z[:, 0], z[:, 1], color=color, **plot_style.method_style(0))
+        ax.plot(zw[:, 0], zw[:, 1], color=color, **worst_style)
 
     ax.scatter([0], [0], marker='x', s=60, color='black', zorder=6, linewidths=1.2)
-    ax.annotate('collision', (0, 0), textcoords='offset points', xytext=(6, 6))
+    # Below-left of the marker: the origin often sits at the top edge of the
+    # data, where a label above it runs into the frame, and the worst-case
+    # curves tend to finish just to its right.
+    ax.annotate('collision', (0, 0), textcoords='offset points', xytext=(-6, -6),
+                ha='right', va='top')
     ax.set_xlabel(r'$z_x$')
     ax.set_ylabel(r'$z_y$')
     ax.set_box_aspect(1)
     ax.grid(True, linewidth=0.3, alpha=0.3)
     ax.tick_params(direction='in', top=True, right=True)
-    ax.legend(frameon=False)
     if own_fig:
         fig.tight_layout()
+    styles = [(plot_style.method_style(0), 'as planned'),
+              ({**plot_style.method_style(1), 'alpha': 0.55}, 'worst case')]
+    _method_style_legend(ax, labels, styles, widen=own_fig)
     _save(fig, save_path)
     return ax

@@ -1,41 +1,27 @@
 # %% [markdown]
 # # Strategically Robust Trajectory Optimization
 #
-# Agents planning around each other have to guess what the others will do. A
-# nominal plan assumes those guesses are right. This notebook works through what
-# changes when each agent instead plans against the *worst* deviation the others
-# could make, at every step of the horizon.
-#
-# The comparison is deliberately three-way, because the obvious objection to
-# robustness is that it is just timidity with extra steps:
+# Each agent plans against the *worst* deviation the other agents could make, at
+# every step of the horizon. This notebook compares that with two baselines:
 #
 # | method | collision cost evaluated at | weight |
 # |---|---|---|
-# | **nominal** | the trajectory as planned | $c_1 = 2$ |
-# | **wider** | the trajectory as planned | $c_1 = 5$ |
+# | **nominal** | the planned trajectory | $c_1 = 2$ |
+# | **wider** | the planned trajectory | $c_1 = 5$ |
 # | **strategically robust** | the worst case, every step | $c_1 = 2$ |
 #
-# "Wider" is the naive way to buy separation: leave the model alone and turn the
-# penalty up. If robustness were only timidity, wider would reproduce it. The
-# figures below show it does not — the two bend the trajectory in different
-# places, and buy different amounts of worst-case margin per unit of deviation
-# from the nominal plan.
+# "Wider" turns the penalty up instead of changing the model. If robustness were
+# only extra caution, wider would reproduce it. It does not.
 #
-# **Solver.** Everything below is solved by **single shooting** — over the
-# controls alone, with states recovered by rolling the dynamics forward. That
-# removes every equality constraint and roughly halves the variable count. On the
-# two smaller scenarios it reaches the same optima as the full-space solver to
-# every digit shown here, about 10x faster; at eight agents it finds a *better*
-# one. Section 11 compares the two directly.
-#
-# **Runtime.** Two to three minutes end to end. `BENCH_RUNS` and `BENCH_RUNS_8`
-# below control how many repetitions the timing section takes.
+# Every solve uses **single shooting**: the controls are the only decision
+# variables, and the states come from rolling the dynamics forward. Section 11
+# compares it with the full-space solver. The notebook runs in about two
+# minutes.
 
 # %% [markdown]
 # ## 0. Setup
 #
-# The repository root holds the solver modules; this cell makes them importable
-# whether Jupyter was started from the root or from `notebooks/`.
+# Makes the solver modules importable from the repository root or `notebooks/`.
 
 # %%
 import pathlib
@@ -64,16 +50,15 @@ from solvers import (optimize_everystep, optimize_everystep_shooting,
 plot_style.apply()
 pd.set_option('display.precision', 4)
 
-# Number of timed repetitions in the runtime section.  The paper uses 30 for the
-# small scenarios and 10 for 8 agents; these are lowered so the notebook runs in
-# minutes.  Ratios are stable at this count -- the absolute times are not.
+# Timed repetitions for section 10.  The paper uses 30 (10 at eight agents).
+# Ratios are stable at these lower counts; absolute times are not.
 BENCH_RUNS = 5
 BENCH_RUNS_8 = 3
 
 # %% [markdown]
 # ### The cost
 #
-# Each agent tracks its own goal and is penalised for being close to anyone else:
+# Each agent tracks its goal and pays a penalty for being near any other agent:
 #
 # $$
 # J = \sum_i \Big[ (x_{i,H} - x_i^f)^\top Q_f (x_{i,H} - x_i^f)
@@ -81,10 +66,9 @@ BENCH_RUNS_8 = 3
 #   \; + \sum_{i<j} \sum_t f\big(\|p_{i,t} - p_{j,t}\|\big)
 # $$
 #
-# with the log-barrier pair cost $f(d) = -c_1 \log(d^2 + \alpha)$, which diverges
-# as $d \to 0$. `make_cost` returns $f$ and $f'$ together — passing a cost without
-# its derivative silently drops SLSQP into finite differences, which is not just
-# slower but tends to stop somewhere worse.
+# The pair cost is the log barrier $f(d) = -c_1 \log(d^2 + \alpha)$. `make_cost`
+# returns $f$ together with $f'$. Without $f'$, SLSQP falls back to finite
+# differences, which is slower and tends to stop at a worse point.
 
 # %%
 cost_nominal, grad_nominal = make_cost('logarithmic', c1=C1_NOMINAL, alpha=ALPHA)
@@ -98,18 +82,17 @@ ax.set_xlabel('pair separation $d$')
 ax.set_ylabel('$f(d)$')
 ax.grid(True, linewidth=0.3, alpha=0.3)
 ax.tick_params(direction='in', top=True, right=True)
-ax.legend(frameon=False, fontsize=8)
 fig.tight_layout()
+plotting.legend_right(ax, fontsize=11)
 plt.show()
 
 # %% [markdown]
-# ## 1. Head-on: two agents swapping places
+# ## 1. Head-on: two agents swap places
 #
-# Single-integrator dynamics, $A = I$, $B = \Delta t\, I$, horizon $H = 20$ over
-# 2 seconds. The two agents start 2 apart and must exchange positions, so the
-# straight-line plans intersect. The 0.1 offset in $y$ breaks the symmetry —
-# without it the problem has two mirror-image optima and the solver picks one
-# arbitrarily.
+# Single integrators ($A = I$, $B = \Delta t\, I$), horizon $H = 20$ over 2 s.
+# The agents start 2 apart and swap places, so their straight-line plans
+# collide. The $\pm 0.05$ offset in $y$ breaks the mirror symmetry, which would
+# otherwise leave two equally good optima for the solver to pick between.
 
 # %%
 H, tf, eps = 20, 2.0, 2.0
@@ -122,8 +105,8 @@ Q = np.eye(sdim)
 Qf = 150.0 * np.eye(sdim)
 R = np.eye(cdim)
 
-x0 = np.array([[0.0, 1.1], [2.0, 1.0]])
-xf = np.array([[2.0, 1.0], [0.0, 1.1]])
+x0 = np.array([[0.0, 0.95], [2.0, 1.05]])
+xf = np.array([[2.0, 1.05], [0.0, 0.95]])
 
 problem = (x0, xf, A, B, H, Q, R, Qf, n_a, sdim, cdim, pdim)
 print(f'{n_a} agents, H = {H}, dt = {dt}, eps = {eps}')
@@ -134,8 +117,7 @@ print(f'single shooting: {n_a * H * cdim} variables, 0 equality constraints')
 # %% [markdown]
 # ### The three solves
 #
-# The robust solve is warm-started from the nominal one, which is both faster and
-# what the runtime tables charge it for.
+# Wider and robust both start from the nominal solution.
 
 # %%
 import time
@@ -167,16 +149,14 @@ pd.DataFrame([
 ]).set_index('method')
 
 # %% [markdown]
-# The objectives are **not comparable across rows** — each is the value of a
-# different function. Wider's is far lower simply because a larger $c_1$ scales
-# the (negative) barrier term; robust's is higher because it is evaluated at
-# perturbed positions that are closer together than the planned ones. What is
-# comparable is the geometry, which is what the rest of the notebook measures.
+# The objectives are **not comparable across rows**, since each method minimizes
+# a different function. The geometry is comparable, and the rest of the notebook
+# measures it.
 
 # %% [markdown]
-# ## 2. The trajectories
+# ## 2. Trajectories
 #
-# Color is the agent, dash pattern is the method.
+# Color is the agent; dash pattern is the method.
 
 # %%
 plotting.plot_trajectories(res_nominal, [res_robust, res_wider], n_a, H, sdim, cdim, xf,
@@ -185,18 +165,16 @@ plotting.plot_trajectories(res_nominal, [res_robust, res_wider], n_a, H, sdim, c
 plt.show()
 
 # %% [markdown]
-# Both alternatives bow further out than the nominal plan, and wider bows
-# furthest. Distance from the nominal path is not the quantity of interest,
-# though — a plan can be far from nominal and still fragile. Section 4 measures
-# what each one is actually buying.
+# Both alternatives bow out further than nominal, and wider bows furthest. But
+# distance from the nominal path is not safety. Section 4 measures what each
+# method actually buys.
 
 # %% [markdown]
 # ## 3. Relative coordinates
 #
-# For a pair, only the relative state $z_t = x_{i,t} - x_{j,t}$ matters: the
-# origin *is* the collision. Solid curves are the plans as flown; dashed curves
-# are where an adversary with energy budget $\varepsilon = 2$ can drag them, one
-# point per horizon prefix.
+# For a pair, only the relative position $z_t = x_{i,t} - x_{j,t}$ matters, and
+# the origin is a collision. Solid curves are the plans. Dashed curves are where
+# an adversary with budget $\varepsilon = 2$ can push them.
 
 # %%
 plotting.plot_relative_trajectory(RESULTS, LABELS, n_a, H, sdim, cdim, pdim, eps, A, B,
@@ -206,9 +184,8 @@ plt.show()
 # %% [markdown]
 # ## 4. What the adversary can take away
 #
-# The gap between a method's solid and dashed curve above — and between its two
-# curves below — is the margin an adversary can erase. A robust plan is one whose
-# *dashed* curve stays up. Its solid curve need not be the highest.
+# The gap between a method's solid and dashed curves is margin the adversary can
+# erase. A robust plan keeps its *dashed* curve high.
 
 # %%
 plotting.plot_avg_distances(RESULTS, LABELS, n_a, H, sdim, cdim, pdim, eps, A, B, dt,
@@ -225,10 +202,9 @@ sep
 # %% [markdown]
 # ## 5. Robustness is not a larger penalty
 #
-# Both alternatives improve the worst case. The question is what each pays for it.
-# Integrated path deviation is the area between a method's trajectory and the
-# nominal one, averaged over agents — a direct measure of how much the plan had to
-# be distorted.
+# Both alternatives raise the worst case. Path deviation measures what each pays
+# for it: the area between a method's trajectory and the nominal one, averaged
+# over agents.
 
 # %%
 import benchmark_tables as bench
@@ -248,24 +224,18 @@ trade['gain per unit deviation'] = (gain / trade['path deviation']).replace([np.
 trade
 
 # %% [markdown]
-# The two are not interchangeable, but the difference is a trade rather than a
-# dominance. On this scenario the wider penalty buys *more* absolute worst-case
-# margin than robustness does — and pays more than twice the path deviation for
-# it. Per unit of distortion the two land within about 10% of each other, and
-# section 8 shows the ordering is not even stable across scenarios.
+# Here wider buys *more* worst-case margin, at twice the path deviation. Per unit
+# of deviation the two are within about 10%, and section 8 shows the ordering
+# flips with more agents.
 #
-# What does not trade away is where the number comes from. Wider's margin is set
-# by $c_1$, a tuning constant with no operational meaning: nothing tells you which
-# value corresponds to which level of protection, and the mapping moves with the
-# scenario. The robust margin is set by $\varepsilon$ — the disturbance energy the
-# plan is required to absorb, stated up front, in units. One is a knob you turn
-# until the picture looks safe; the other is an assumption you can defend.
+# The lasting difference is what sets the margin. Wider's comes from $c_1$, a
+# tuning constant with no physical meaning. Robust's comes from $\varepsilon$,
+# the disturbance energy the plan must absorb, stated up front in units.
 
 # %% [markdown]
 # ## 6. Animation
 #
-# Written to `figures/` and embedded as a GIF rather than as inline JavaScript;
-# the JavaScript form is what turns a notebook into a multi-megabyte file.
+# Saved as a GIF, which keeps the notebook far smaller than inline JavaScript.
 
 # %%
 fig, anim = plotting.animate_trajectories(
@@ -277,19 +247,13 @@ display(Image(filename=str(FIGDIR / 'headon_animation.gif')))
 # %% [markdown]
 # ## 7. Parallel: a conflict the nominal plan never sees
 #
-# The head-on case forces the issue — the two straight-line plans intersect, so
-# the nominal solver has to resolve a conflict whether or not anyone is robust.
-# The parallel case is the opposite, and it is the more revealing of the two.
-#
-# Both agents travel the same direction, two apart, and never approach. The
-# nominal solve converges in a handful of iterations and the log barrier is
-# essentially inactive: there is nothing to avoid. Then give the adversary a
-# budget, and a conflict appears that the nominal planner had no reason to
-# anticipate.
+# Two agents travel side by side, 2 apart, and never approach. The barrier is
+# essentially inactive and the nominal solve is easy. Give the adversary a
+# budget, though, and a conflict appears that the nominal model cannot express.
 
 # %%
 x0_par = np.array([[0.0, 0.0], [2.0, 0.0]])
-xf_par = np.array([[0.0, 3.0], [2.0, 3.0]])
+xf_par = np.array([[0.0, 2.0], [2.0, 2.0]])
 problem_par = (x0_par, xf_par, A, B, H, Q, R, Qf, n_a, sdim, cdim, pdim)
 
 res_par_nominal = optimize_optimal_shooting(*problem_par, cost_nominal,
@@ -327,37 +291,22 @@ sep_par['gain per unit deviation'] = (
 sep_par
 
 # %% [markdown]
-# Read the nominal row against the head-on one in section 4. There the plans
-# crossed and the nominal solve was pushed down to a closest approach well under
-# one; here it stays at 2.0, the separation it started with, because the barrier
-# never engages. The nominal solve is *easy* — and the worst case still takes a
-# large bite out of that margin.
+# `min separation` is 2.0 for every method: the agents are never closer than at
+# the start. Every difference lives in the worst-case column. The nominal planner
+# is not careless, since by its own model there is no conflict.
 #
-# Note that the `min separation` column is identical for all three methods: the
-# agents travel in parallel and stay exactly their starting distance apart no
-# matter what. Every difference between the methods lives in the worst-case
-# column, which is the whole argument in one table.
+# Wider again buys more absolute margin at several times the deviation. Per unit
+# of deviation, though, robust now leads by far more than the ~10% seen head-on.
 #
-# The nominal planner is not being careless — by its own model there is no
-# conflict here at all. The margin only disappears once another agent is allowed
-# to deviate, which is exactly the uncertainty the nominal formulation has no way
-# to express.
-#
-# This is also where the efficiency gap is widest. Compare the last column
-# against the same figure for the head-on case in section 5: the wider penalty
-# again buys more absolute margin, and again pays several times over for it, but
-# here the ratio between the two is far larger than the ~10% seen head-on.
-#
-# It is also why the parallel row carries one of the highest runtime ratios in
-# section 10: the ratio is `1 + robust_iterations / nominal_iterations`, and the
-# denominator is small precisely because the nominal problem is so easy.
+# The easy nominal solve also explains this scenario's high runtime ratio in
+# section 10. The ratio is roughly `1 + robust_iterations / nominal_iterations`,
+# and here the nominal count is small.
 
 # %% [markdown]
 # ## 8. Four agents
 #
-# Six pairs instead of one, and the interaction is no longer a single crossing:
-# agents must resolve conflicts with several neighbours at once. Everything below
-# is the same code with a different scenario.
+# Six pairs, and each agent must resolve conflicts with several neighbours at
+# once. Only the scenario changes.
 
 # %%
 n_a4 = 4
@@ -375,8 +324,7 @@ res4_robust = optimize_everystep_shooting(*problem4, eps, cost_nominal,
                                           u_opt=u4_nom)
 RESULTS4 = [res4_nominal, res4_wider, res4_robust]
 
-# Only nominal and robust are drawn: at four agents the wider curves add twelve
-# more lines without adding to the comparison, which the tables below carry.
+# Wider is left off the plot (twelve more curves); the tables below include it.
 plotting.plot_trajectories(res4_nominal, [res4_robust], n_a4, H, sdim, cdim, xf_4,
                            method_labels=['nominal', 'strat. robust'],
                            save_path=FIGDIR / '4agent_trajectories.png')
@@ -392,31 +340,21 @@ pd.DataFrame(plotting.min_separation_table(
     RESULTS4, LABELS, n_a4, H, sdim, cdim, pdim, eps, A, B)).set_index('method')
 
 # %% [markdown]
-# Read those two outputs against each other, because they disagree.
+# The plot and the table disagree. On **mean** worst-case separation, wider sits
+# well above robust. On the **minimum** over all pairs and steps, which is what a
+# safety claim rests on, robust wins, with less than half the path deviation.
 #
-# On the **mean** worst-case separation the wider penalty sits well above the
-# robust solve. On the **minimum** over all six pairs and every step — the
-# quantity a safety claim actually rests on — the ordering reverses, and
-# robustness wins on both axes at once: a larger worst-case margin for less than
-# half the path deviation.
-#
-# The mean is what hides it. Averaging over six pairs lets slack in five of them
-# cover a tight sixth, and a wider penalty buys exactly that kind of slack — it
-# pushes every pair apart uniformly, including the ones that were never in
-# danger. The robust solve spends its distortion where the adversary would
-# actually attack.
+# Averaging lets slack in five pairs hide a tight sixth. Wider pushes every pair
+# apart, including pairs that were never in danger. Robust spends its deviation
+# where the adversary would attack.
 
 # %% [markdown]
 # ## 9. Eight agents on a circle
 #
-# The stress case: eight agents evenly spaced on a circle of radius 2, each
-# heading to the diametrically opposite point. Every straight-line plan passes
-# through the centre, so all 28 pairs conflict at once and the nominal solve has
-# to find a rotation for the whole formation.
-#
-# Note how the cost distributes: the robust solve, warm-started, is *faster* than
-# the nominal one it starts from. Under the full-space solver this cell took ~55 s;
-# by shooting it takes about three.
+# Eight agents on a circle of radius 2 each head for the opposite point. Every
+# straight-line plan passes through the centre, so all 28 pairs conflict at once.
+# Warm-started, the robust solve is *faster* than the nominal solve it starts
+# from.
 
 # %%
 n_a8 = 8
@@ -459,31 +397,22 @@ pd.DataFrame(plotting.min_separation_table(
 # %% [markdown]
 # ## 10. Runtime
 #
-# `benchmark_tables.py` produces the paper's timing tables and is importable, so
-# the same code runs here and on a headless box. Three conventions in it are
-# worth knowing, each the result of a measurement that turned out to be wrong:
+# `benchmark_tables.py` produces the paper's timing tables. It follows three
+# rules, each learned from a measurement that turned out wrong:
 #
-# 1. **Analytic gradients on every method**, including the nominal baseline and
-#    the nominal initialization inside the robust solve. Mixing modes made the
-#    8-agent robust overhead read 3.72x instead of 1.29x, because the
-#    finite-difference baseline stopped early on a worse optimum.
-# 2. **Median reported next to mean.** One outlying run moved the 4-agent ratio
-#    from 1.89x to 1.72x under the mean. CV is printed so a noisy row is visible.
-# 3. **Objectives recorded and checked for uniqueness.** If the runs in a cell
-#    did not all land on the same optimum, the spread is a mix of local minima
-#    rather than machine noise, and the row must not be averaged. The `uniq`
-#    column flags it.
+# 1. **Analytic gradients for every method.** A finite-difference baseline once
+#    stopped early at a worse optimum and inflated the 8-agent robust overhead
+#    from 1.29x to 3.72x.
+# 2. **Median next to mean.** One outlier moved the 4-agent ratio from 1.89x to
+#    1.72x under the mean. The CV column flags noisy rows.
+# 3. **One optimum per cell.** If the runs land on different local minima, the
+#    timing spread is not machine noise. The `uniq` column must be 1.
 #
-# The robust timing includes its own nominal initialization, so the ratio is the
-# honest end-to-end cost of switching methods, not the marginal cost of the
-# robust solve alone.
-#
-# `USE_SHOOTING` switches every row to the same parameterization the rest of this
-# notebook uses. Expect *higher* ratios than the full-space table in the README,
-# and that is the more honest measurement: in the full space 96-100% of every
-# SLSQP iteration is the constrained QP, a cost both methods pay identically,
-# which hides the robust objective and gradient evaluation almost entirely.
-# Shooting removes the QP and the difference becomes visible.
+# The robust time includes its nominal initialization, so the ratio is the full
+# cost of switching methods. `USE_SHOOTING` matches this notebook's solver.
+# Some ratios run higher than in the README's full-space table, where a
+# constrained QP that both methods share dominates each iteration and hides the
+# robust cost.
 
 # %%
 bench.USE_SHOOTING = True
@@ -511,27 +440,19 @@ runtime = pd.DataFrame(rows).set_index(['scenario', 'method'])
 runtime
 
 # %% [markdown]
-# Every `uniq` above must be 1. Anything else means that cell mixed local minima
-# and its timings are not a like-for-like average.
-#
-# The headline number is the `ratio` column on the **Strat. Robust** rows: the
-# multiple of nominal runtime that strategic robustness costs, end to end.
+# The headline is the `ratio` on the **Strat. Robust** rows: the end-to-end cost
+# of robustness as a multiple of nominal runtime.
 
 # %%
 print(bench.format_tables(results_bench, stat='median'))
 
 # %% [markdown]
-# ## 11. What the full space would have given
+# ## 11. Full space vs single shooting
 #
-# Everything above used single shooting. The alternative keeps $x$ and $u$ as
-# decision variables and enforces the dynamics as equality constraints — 336 of
-# them at eight agents, on top of twice the variables.
-#
-# The two do not start from the same point: the full-space default guess
-# interpolates $x$ linearly with $u = 0$, a pair its own dynamics do not produce,
-# and shooting cannot represent an inconsistent start. On the smaller scenarios
-# they converge to the same optimum anyway. At eight agents they do not, and it
-# is shooting that finds the better one — so compare objectives alongside times.
+# The full-space solver keeps $x$ and $u$ as decision variables and enforces the
+# dynamics as equality constraints, 336 of them at eight agents. Its default
+# initial guess differs from shooting's, and at eight agents the two reach
+# different optima, so compare objectives alongside times.
 
 # %%
 t0 = time.perf_counter()
@@ -558,71 +479,13 @@ pd.DataFrame([
 ]).set_index(['method', 'parameterization'])
 
 # %% [markdown]
-# The full-space nominal solve stops at a worse optimum (higher objective) and
-# takes an order of magnitude longer to get there. Its robust solve inherits that
-# start, which is why the worst-case margin in section 9 is better than the
-# full-space figures quoted in the README.
-
-# %% [markdown]
-# ## 12. An alternative encoding
-#
-# Every figure above uses color for the agent and dash pattern for the method,
-# with the eight agent colors collapsed into one "agents" swatch so the legend
-# stays at three entries. That keeps individual trajectories followable while
-# spending almost no legend on them.
-#
-# The alternative gives up agent identity entirely: one color per **method**,
-# all agents pooled into it. Nothing here argues about a particular agent, so
-# little is lost, and the two bundles land in direct contrast rather than asking
-# the reader to separate dash patterns inside eight hues. Which one is better
-# depends on whether a reader ever needs to trace a single agent's path.
-
-# %%
-plotting.plot_trajectories_by_method(
-    [res8_nominal, res8_robust], ['nominal', 'strategically robust'],
-    n_a8, H, sdim, cdim, xf_8,
-    save_path=FIGDIR / '8agent_bundle.png')
-plt.show()
-
-# %% [markdown]
-# Either encoding shows the robust bundle sitting outside the nominal one. The
-# numbers below say how far, and how evenly — computed rather than quoted, since
-# they move whenever the solver or its parameterization does.
-
-# %%
-centre = np.array([2.0, 2.0])
-x8_rob = split_solution(res8_robust, n_a8, H, sdim, cdim)[0]
-res8_wider = optimize_optimal_shooting(*problem8, cost_wider,
-                                       distance_cost_grad_func=grad_wider, u_opt=u8_nom)
-x8_wide = split_solution(res8_wider, n_a8, H, sdim, cdim)[0]
-
-def per_agent_deviation(x):
-    return np.array([bench.integrated_path_deviation(x[i:i + 1], x8_nom[i:i + 1], dt, pdim)
-                     for i in range(n_a8)])
-
-closest = lambda x: np.linalg.norm(x[:, :, :pdim] - centre, axis=2).min(axis=1)
-dev_rob, dev_wide = per_agent_deviation(x8_rob), per_agent_deviation(x8_wide)
-near_nom, near_rob = closest(x8_nom), closest(x8_rob)
-
-print(f'agents ending further from the centre : {(near_rob > near_nom).sum()} of {n_a8}')
-print(f'mean closest approach to the centre   : {near_nom.mean():.2f} -> {near_rob.mean():.2f}')
-print(f'robust per-agent deviation            : {dev_rob.min():.2f} to {dev_rob.max():.2f}'
-      f'  ({dev_rob.max() / dev_rob.min():.1f}x spread)')
-print(f'mean deviation, robust vs wider       : {dev_rob.mean():.2f} vs {dev_wide.mean():.2f}')
-
-# %% [markdown]
-# Two things to read off that. The robust solve pushes most of the formation
-# away from the centre, but *not uniformly* — the per-agent spread is several
-# fold, so it redistributes the formation rather than simply inflating it. And it
-# is cheap in distortion: its mean per-agent deviation is a fraction of what the
-# wider penalty spends to buy a smaller worst-case margin.
+# The full-space nominal solve is an order of magnitude slower and stops at a
+# worse optimum. Its robust solve inherits that start, which is why the README's
+# full-space robust margin at eight agents is lower than section 9's.
 
 # %% [markdown]
 # ---
 #
-# **Where to go next.** `adversary.py` documents the closed form for the worst
-# case. The appendix of `README.md` derives the other half — why the adversary's
-# response never appears in the gradient, since the envelope theorem removes it,
-# and how an earlier derivation that differentiated through the Riccati recursion
-# came out wrong by order 10. The paper gives the first half (Appendix B) but not
-# the second.
+# **Further reading.** `adversary.py` documents the closed-form worst case. The
+# `README.md` appendix shows why the adversary's response drops out of the
+# gradient (the envelope theorem), which the paper does not derive.

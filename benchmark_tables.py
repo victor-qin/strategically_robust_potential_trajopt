@@ -116,13 +116,13 @@ def _scenarios():
     s = {}
 
     cfg = _single_integrator(2)
-    cfg['x0'] = np.array([[0.0, 1.1], [2.0, 1.0]])
-    cfg['xf'] = np.array([[2.0, 1.0], [0.0, 1.1]])
+    cfg['x0'] = np.array([[0.0, 0.95], [2.0, 1.05]])
+    cfg['xf'] = np.array([[2.0, 1.05], [0.0, 0.95]])
     s['Head-on'] = cfg
 
     cfg = _single_integrator(2)
     cfg['x0'] = np.array([[0.0, 0.0], [2.0, 0.0]])
-    cfg['xf'] = np.array([[0.0, 3.0], [2.0, 3.0]])
+    cfg['xf'] = np.array([[0.0, 2.0], [2.0, 2.0]])
     s['Parallel'] = cfg
 
     cfg = _single_integrator(4)
@@ -139,9 +139,9 @@ def _scenarios():
     # gets crowded -- adjacent agents start 2*r*sin(pi/12) = 1.04 apart versus
     # 1.53 at n_a = 8 -- so this is a harder collision problem, not just a bigger
     # one.  Not part of the published tables.
-    cfg = _single_integrator(12)
-    cfg['x0'], cfg['xf'] = _circle(12)
-    s['12 agents'] = cfg
+    # cfg = _single_integrator(12)
+    # cfg['x0'], cfg['xf'] = _circle(12)
+    # s['12 agents'] = cfg
 
     return s
 
