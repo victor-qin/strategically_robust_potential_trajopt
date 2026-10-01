@@ -14,9 +14,8 @@
 # only extra caution, wider would reproduce it. It does not.
 #
 # Every solve uses **single shooting**: the controls are the only decision
-# variables, and the states come from rolling the dynamics forward. Section 11
-# compares it with the full-space solver. The notebook runs in about two
-# minutes.
+# variables, and the states come from rolling the dynamics forward. The notebook
+# runs in about a minute.
 
 # %% [markdown]
 # ## 0. Setup
@@ -41,16 +40,17 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from IPython.display import Image, display
 
+import benchmark_tables as bench
 import plot_style
 import plotting
 from costs import ALPHA, C1_NOMINAL, C1_WIDER, make_cost
-from solvers import (optimize_everystep, optimize_everystep_shooting,
-                     optimize_optimal, optimize_optimal_shooting, split_solution)
+from solvers import (optimize_everystep_shooting, optimize_optimal_shooting,
+                     split_solution)
 
 plot_style.apply()
 pd.set_option('display.precision', 4)
 
-# Timed repetitions for section 10.  The paper uses 30 (10 at eight agents).
+# Timed repetitions for section 6.  The paper uses 30 (10 at eight agents).
 # Ratios are stable at these lower counts; absolute times are not.
 BENCH_RUNS = 5
 BENCH_RUNS_8 = 3
@@ -154,98 +154,64 @@ pd.DataFrame([
 # measures it.
 
 # %% [markdown]
-# ## 2. Trajectories
+# ## 2. Head-on summary
 #
-# Color is the agent; dash pattern is the method.
+# Two measures carry through the rest of the notebook:
+#
+# - **worst case**: the separation left after an adversary with budget
+#   $\varepsilon = 2$ pushes the plan as hard as it can, at every step. The gap
+#   between a plan and its worst case is margin the adversary can erase.
+# - **path deviation**: the area between a method's trajectory and the nominal
+#   one, averaged over agents. It is what a method pays for its margin.
+#
+# In the figure, color is the agent and dash pattern is the method.
 
 # %%
+def tradeoff_table(results, x_ref, n_agents):
+    """Closest approach, as planned and worst case, against the deviation paid for it."""
+    tab = pd.DataFrame(plotting.min_separation_table(
+        results, LABELS, n_agents, H, sdim, cdim, pdim, eps, A, B)).set_index('method')
+    tab['path deviation'] = [
+        bench.integrated_path_deviation(split_solution(r, n_agents, H, sdim, cdim)[0],
+                                        x_ref, dt, pdim) for r in results]
+    gain = (tab['min separation, worst case']
+            - tab.loc['nominal', 'min separation, worst case'])
+    tab['worst-case gain'] = gain
+    tab['gain per unit deviation'] = (
+        gain / tab['path deviation']).replace([np.inf, -np.inf], np.nan)
+    return tab
+
+
 plotting.plot_trajectories(res_nominal, [res_robust, res_wider], n_a, H, sdim, cdim, xf,
-                           method_labels=LABELS[:1] + ['strat. robust', 'wider'],
+                           method_labels=['nominal', 'strat. robust', 'wider'],
                            save_path=FIGDIR / 'headon_trajectories.png')
 plt.show()
 
-# %% [markdown]
-# Both alternatives bow out further than nominal, and wider bows furthest. But
-# distance from the nominal path is not safety. Section 4 measures what each
-# method actually buys.
+tradeoff_table(RESULTS, x_nom, n_a)
 
 # %% [markdown]
-# ## 3. Relative coordinates
-#
-# For a pair, only the relative position $z_t = x_{i,t} - x_{j,t}$ matters, and
-# the origin is a collision. Solid curves are the plans. Dashed curves are where
-# an adversary with budget $\varepsilon = 2$ can push them.
-
-# %%
-plotting.plot_relative_trajectory(RESULTS, LABELS, n_a, H, sdim, cdim, pdim, eps, A, B,
-                                  save_path=FIGDIR / 'headon_relative.png')
-plt.show()
-
-# %% [markdown]
-# ## 4. What the adversary can take away
-#
-# The gap between a method's solid and dashed curves is margin the adversary can
-# erase. A robust plan keeps its *dashed* curve high.
-
-# %%
-plotting.plot_avg_distances(RESULTS, LABELS, n_a, H, sdim, cdim, pdim, eps, A, B, dt,
-                            save_path=FIGDIR / 'headon_separation.png')
-plt.show()
-
-# %%
-sep = pd.DataFrame(plotting.min_separation_table(
-    RESULTS, LABELS, n_a, H, sdim, cdim, pdim, eps, A, B)).set_index('method')
-sep['worst-case margin vs nominal'] = (
-    sep['min separation, worst case'] / sep.loc['nominal', 'min separation, worst case'])
-sep
-
-# %% [markdown]
-# ## 5. Robustness is not a larger penalty
-#
-# Both alternatives raise the worst case. Path deviation measures what each pays
-# for it: the area between a method's trajectory and the nominal one, averaged
-# over agents.
-
-# %%
-import benchmark_tables as bench
-
-trade = []
-for lab, res in zip(LABELS, RESULTS):
-    x = split_solution(res, n_a, H, sdim, cdim)[0]
-    trade.append({
-        'method': lab,
-        'path deviation': bench.integrated_path_deviation(x, x_nom, dt, pdim),
-        'min separation, worst case': sep.loc[lab, 'min separation, worst case'],
-    })
-trade = pd.DataFrame(trade).set_index('method')
-gain = trade['min separation, worst case'] - trade.loc['nominal', 'min separation, worst case']
-trade['worst-case gain'] = gain
-trade['gain per unit deviation'] = (gain / trade['path deviation']).replace([np.inf, -np.inf], np.nan)
-trade
-
-# %% [markdown]
-# Here wider buys *more* worst-case margin, at twice the path deviation. Per unit
-# of deviation the two are within about 10%, and section 8 shows the ordering
-# flips with more agents.
+# Both alternatives bow out further than nominal, and wider bows furthest. Robust
+# roughly doubles nominal's worst-case closest approach and wider nearly triples
+# it, at twice robust's path deviation. Per unit of deviation the two are within
+# about 10%.
 #
 # The lasting difference is what sets the margin. Wider's comes from $c_1$, a
 # tuning constant with no physical meaning. Robust's comes from $\varepsilon$,
 # the disturbance energy the plan must absorb, stated up front in units.
-
-# %% [markdown]
-# ## 6. Animation
 #
-# Saved as a GIF, which keeps the notebook far smaller than inline JavaScript.
+# The animation plays the robust plan over the faint nominal and wider paths. It
+# is saved as a GIF, which keeps the notebook far smaller than inline JavaScript.
 
 # %%
 fig, anim = plotting.animate_trajectories(
-    res_nominal, [res_robust], n_a, H, sdim, cdim, xf, dt,
+    res_nominal, [res_robust, res_wider], n_a, H, sdim, cdim, xf, dt,
+    method_labels=['nominal', 'strat. robust', 'wider'],
     save_path=FIGDIR / 'headon_animation.gif')
 plt.close(fig)
 display(Image(filename=str(FIGDIR / 'headon_animation.gif')))
 
 # %% [markdown]
-# ## 7. Parallel: a conflict the nominal plan never sees
+# ## 3. Parallel: a conflict the nominal plan never sees
 #
 # Two agents travel side by side, 2 apart, and never approach. The barrier is
 # essentially inactive and the nominal solve is easy. Give the adversary a
@@ -273,22 +239,7 @@ plotting.plot_trajectories(res_par_nominal, [res_par_robust, res_par_wider],
                            save_path=FIGDIR / 'parallel_trajectories.png')
 plt.show()
 
-# %%
-plotting.plot_avg_distances(RESULTS_PAR, LABELS, n_a, H, sdim, cdim, pdim, eps, A, B, dt,
-                            save_path=FIGDIR / 'parallel_separation.png')
-plt.show()
-
-sep_par = pd.DataFrame(plotting.min_separation_table(
-    RESULTS_PAR, LABELS, n_a, H, sdim, cdim, pdim, eps, A, B)).set_index('method')
-sep_par['path deviation'] = [
-    bench.integrated_path_deviation(split_solution(r, n_a, H, sdim, cdim)[0],
-                                    x_par_nom, dt, pdim) for r in RESULTS_PAR]
-gain_par = (sep_par['min separation, worst case']
-            - sep_par.loc['nominal', 'min separation, worst case'])
-sep_par['worst-case gain'] = gain_par
-sep_par['gain per unit deviation'] = (
-    gain_par / sep_par['path deviation']).replace([np.inf, -np.inf], np.nan)
-sep_par
+tradeoff_table(RESULTS_PAR, x_par_nom, n_a)
 
 # %% [markdown]
 # `min separation` is 2.0 for every method: the agents are never closer than at
@@ -299,11 +250,22 @@ sep_par
 # of deviation, though, robust now leads by far more than the ~10% seen head-on.
 #
 # The easy nominal solve also explains this scenario's high runtime ratio in
-# section 10. The ratio is roughly `1 + robust_iterations / nominal_iterations`,
+# section 6. The ratio is roughly `1 + robust_iterations / nominal_iterations`,
 # and here the nominal count is small.
+#
+# As in the head-on case, the animation plays the robust plan over the faint
+# nominal and wider paths.
+
+# %%
+fig, anim = plotting.animate_trajectories(
+    res_par_nominal, [res_par_robust, res_par_wider], n_a, H, sdim, cdim, xf_par, dt,
+    method_labels=['nominal', 'strat. robust', 'wider'],
+    save_path=FIGDIR / 'parallel_animation.gif')
+plt.close(fig)
+display(Image(filename=str(FIGDIR / 'parallel_animation.gif')))
 
 # %% [markdown]
-# ## 8. Four agents
+# ## 4. Four agents
 #
 # Six pairs, and each agent must resolve conflicts with several neighbours at
 # once. Only the scenario changes.
@@ -322,34 +284,23 @@ res4_wider = optimize_optimal_shooting(*problem4, cost_wider,
 res4_robust = optimize_everystep_shooting(*problem4, eps, cost_nominal,
                                           distance_cost_grad_func=grad_nominal,
                                           u_opt=u4_nom)
-RESULTS4 = [res4_nominal, res4_wider, res4_robust]
 
-# Wider is left off the plot (twelve more curves); the tables below include it.
+# Wider is left off the plot (twelve more curves); the animation shows it faded.
 plotting.plot_trajectories(res4_nominal, [res4_robust], n_a4, H, sdim, cdim, xf_4,
                            method_labels=['nominal', 'strat. robust'],
                            save_path=FIGDIR / '4agent_trajectories.png')
 plt.show()
 
 # %%
-plotting.plot_avg_distances(RESULTS4, LABELS, n_a4, H, sdim, cdim, pdim, eps, A, B, dt,
-                            show_nominal=False,
-                            save_path=FIGDIR / '4agent_separation.png')
-plt.show()
-
-pd.DataFrame(plotting.min_separation_table(
-    RESULTS4, LABELS, n_a4, H, sdim, cdim, pdim, eps, A, B)).set_index('method')
-
-# %% [markdown]
-# The plot and the table disagree. On **mean** worst-case separation, wider sits
-# well above robust. On the **minimum** over all pairs and steps, which is what a
-# safety claim rests on, robust wins, with less than half the path deviation.
-#
-# Averaging lets slack in five pairs hide a tight sixth. Wider pushes every pair
-# apart, including pairs that were never in danger. Robust spends its deviation
-# where the adversary would attack.
+fig, anim = plotting.animate_trajectories(
+    res4_nominal, [res4_robust, res4_wider], n_a4, H, sdim, cdim, xf_4, dt,
+    method_labels=['nominal', 'strat. robust', 'wider'],
+    save_path=FIGDIR / '4agent_animation.gif')
+plt.close(fig)
+display(Image(filename=str(FIGDIR / '4agent_animation.gif')))
 
 # %% [markdown]
-# ## 9. Eight agents on a circle
+# ## 5. Eight agents on a circle
 #
 # Eight agents on a circle of radius 2 each head for the opposite point. Every
 # straight-line plan passes through the centre, so all 28 pairs conflict at once.
@@ -385,17 +336,15 @@ plotting.plot_trajectories(res8_nominal, [res8_robust], n_a8, H, sdim, cdim, xf_
 plt.show()
 
 # %%
-plotting.plot_avg_distances([res8_nominal, res8_robust], ['nominal', 'strat. robust'],
-                            n_a8, H, sdim, cdim, pdim, eps, A, B, dt,
-                            save_path=FIGDIR / '8agent_separation.png')
-plt.show()
-
-pd.DataFrame(plotting.min_separation_table(
-    [res8_nominal, res8_robust], ['nominal', 'strat. robust'],
-    n_a8, H, sdim, cdim, pdim, eps, A, B)).set_index('method')
+fig, anim = plotting.animate_trajectories(
+    res8_nominal, [res8_robust], n_a8, H, sdim, cdim, xf_8, dt,
+    method_labels=['nominal', 'strat. robust'],
+    save_path=FIGDIR / '8agent_animation.gif')
+plt.close(fig)
+display(Image(filename=str(FIGDIR / '8agent_animation.gif')))
 
 # %% [markdown]
-# ## 10. Runtime
+# ## 6. Runtime
 #
 # `benchmark_tables.py` produces the paper's timing tables. It follows three
 # rules, each learned from a measurement that turned out wrong:
@@ -445,43 +394,6 @@ runtime
 
 # %%
 print(bench.format_tables(results_bench, stat='median'))
-
-# %% [markdown]
-# ## 11. Full space vs single shooting
-#
-# The full-space solver keeps $x$ and $u$ as decision variables and enforces the
-# dynamics as equality constraints, 336 of them at eight agents. Its default
-# initial guess differs from shooting's, and at eight agents the two reach
-# different optima, so compare objectives alongside times.
-
-# %%
-t0 = time.perf_counter()
-res8_nominal_f = optimize_optimal(*problem8, cost_nominal,
-                                  distance_cost_grad_func=grad_nominal)
-t8_nominal_f = time.perf_counter() - t0
-x8_nom_f, u8_nom_f = split_solution(res8_nominal_f, n_a8, H, sdim, cdim)
-
-t0 = time.perf_counter()
-res8_robust_f = optimize_everystep(*problem8, eps, cost_nominal,
-                                   distance_cost_grad_func=grad_nominal,
-                                   x_opt=x8_nom_f, u_opt=u8_nom_f)
-t8_robust_f = time.perf_counter() - t0
-
-pd.DataFrame([
-    {'method': 'nominal', 'parameterization': 'single shooting',
-     'seconds': t8_nominal, 'objective': res8_nominal.fun, 'iterations': res8_nominal.nit},
-    {'method': 'nominal', 'parameterization': 'full space',
-     'seconds': t8_nominal_f, 'objective': res8_nominal_f.fun, 'iterations': res8_nominal_f.nit},
-    {'method': 'strat. robust', 'parameterization': 'single shooting',
-     'seconds': t8_robust, 'objective': res8_robust.fun, 'iterations': res8_robust.nit},
-    {'method': 'strat. robust', 'parameterization': 'full space',
-     'seconds': t8_robust_f, 'objective': res8_robust_f.fun, 'iterations': res8_robust_f.nit},
-]).set_index(['method', 'parameterization'])
-
-# %% [markdown]
-# The full-space nominal solve is an order of magnitude slower and stops at a
-# worse optimum. Its robust solve inherits that start, which is why the README's
-# full-space robust margin at eight agents is lower than section 9's.
 
 # %% [markdown]
 # ---

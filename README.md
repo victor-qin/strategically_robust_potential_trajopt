@@ -41,8 +41,7 @@ worst-case margin with less than half the path deviation.
 Wider pushes every pair apart, including pairs that were never in danger.
 Robust spends its deviation where the adversary would attack. On *mean*
 worst-case separation wider still looks better, because slack in five pairs
-hides a tight sixth. The [notebook](notebooks/collision_example.ipynb) shows
-both statistics.
+hides a tight sixth.
 
 **Eight agents** on a circle, each heading for the opposite point, so all 28
 pairs conflict at once. Under the worst case the nominal plan leaves the closest
@@ -100,7 +99,7 @@ iteration and hides the robust evaluation. Shooting removes that shared cost.
 | `solvers.py` | Nominal and robust solvers, each in full-space and single-shooting form. |
 | `benchmark_tables.py` | Runtime and path-deviation tables. Needs only the solver dependencies. |
 | `plotting.py`, `plot_style.py` | Figures, animations and their shared style. The solver never imports them. |
-| `notebooks/collision_example.ipynb` | The worked example, with every figure and table for 2, 4 and 8 agents. |
+| `notebooks/collision_example.ipynb` | The worked example: trajectory figures and animations for 2, 4 and 8 agents, the 2-agent separation tables, and the runtime tables. |
 | `notebooks/collision_example.py` | Its source in `# %%` cell format, and the file of record. `notebooks/build.py` rebuilds the notebook from it. |
 
 ## Install and reproduce

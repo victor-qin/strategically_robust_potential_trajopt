@@ -710,27 +710,41 @@ def plot_trajectories_by_method(results, labels, n_a, H, sdim, cdim, xf, ax=None
 
 
 def animate_trajectories(result_nominal, result_others, n_a, H, sdim, cdim, xf, dt,
-                         which=0, xlim=None, ylim=None, save_path=None, fps=5):
-    """Animate one method's motion against the faint nominal paths.
+                         which=0, method_labels=None, xlim=None, ylim=None,
+                         show_legend=True, save_path=None, fps=5):
+    """Animate one method's motion against the other methods' faint paths.
+
+    Every method keeps the dash pattern `plot_trajectories` gives it, so a frame
+    reads with the static figure's key.  The methods not animated are drawn in
+    full from the first frame, faded, as the fixed reference the moving one is
+    judged against.
 
     Parameters
     ----------
     result_nominal : OptimizeResult
-        Drawn as faint static paths for context, whichever method is animated.
+        Drawn as a faint static path unless `which` animates it.
     result_others : list of OptimizeResult
-        Candidates to animate; `which` selects one.
+        Candidates to animate; `which` selects among them, and the rest are
+        drawn as faint static paths.
     n_a, H, sdim, cdim : int
         Number of agents, horizon length, state and control dimensions.
     xf : ndarray, shape (n_a, sdim)
         Targets, marked with stars.
     dt : float
         Timestep, used for the on-figure clock.
-    which : int
-        Index into `result_others` to animate; -1 animates the nominal itself,
-        as does an empty `result_others`.
+    which : int or sequence of int
+        Index into `result_others` to animate, or several to animate together,
+        each marking its current position with its own marker shape.  -1
+        animates the nominal itself, as does an empty `result_others`.
+    method_labels : list of str, optional
+        One label per method including the nominal, in the order
+        `result_nominal` then `result_others`, as for `plot_trajectories`.
     xlim, ylim : (float, float), optional
         Axis limits.  Both must be given to take effect; otherwise the limits
         are taken from the data with a 0.5 margin.
+    show_legend : bool
+        Key the methods below the axis.  Agents are not keyed: color is the only
+        thing distinguishing them, and it is the same in every frame.
     save_path : str or pathlib.Path, optional
         Write a GIF here (requires pillow).  Nothing is written when None.
     fps : int
@@ -747,16 +761,35 @@ def animate_trajectories(result_nominal, result_others, n_a, H, sdim, cdim, xf, 
     plot_style.apply()
     x_nom = split_solution(result_nominal, n_a, H, sdim, cdim)[0]
     x_others = _trajectories(result_others, n_a, H, sdim, cdim)
-    x_anim = x_nom if which < 0 or not x_others else x_others[which]
+    if not x_others:
+        which = [-1]
+    elif np.ndim(which) == 0:
+        which = [which]
+    # Method index as plot_style counts it: 0 is the nominal, j + 1 is result_others[j].
+    methods = [0 if j < 0 else j + 1 for j in which]
+    x_all = [x_nom] + x_others
+    markers = 'os^D'
+    faint = 0.15
+    if method_labels is None:
+        method_labels = ['nominal'] + [f'method {j + 1}' for j in range(len(x_others))]
 
-    fig, ax = plt.subplots(figsize=(PANEL, PANEL))
+    ncol, strip = _legend_shape(len(x_all))
+    fig, ax = _fixed_box_figure(strip if show_legend else 0.0)
     ax.set_box_aspect(1)
     ax.grid(True, linewidth=0.3, alpha=0.3)
     ax.tick_params(direction='in', top=True, right=True)
 
-    for i in range(n_a):                       # faint nominal paths for context
-        ax.plot(x_nom[i, :, 0], x_nom[i, :, 1],
-                color=plot_style.agent_color(i), alpha=0.15, lw=1.0)
+    for m, x in enumerate(x_all):              # faint static paths for context
+        if m in methods:
+            continue
+        # A dash pattern lays down a fraction of a solid line's ink, so at the
+        # same alpha a faded dotted path all but disappears; draw it heavier to
+        # fade to the solid one's weight.
+        solid = plot_style.method_style(m)['linestyle'] == '-'
+        style = {**plot_style.method_style(m), 'alpha': faint if solid else 2 * faint,
+                 'linewidth': 1.0 if solid else 1.3}
+        for i in range(n_a):
+            ax.plot(x[i, :, 0], x[i, :, 1], color=plot_style.agent_color(i), **style)
 
     if xlim is not None and ylim is not None:
         ax.set_xlim(*xlim)
@@ -767,17 +800,44 @@ def animate_trajectories(result_nominal, result_others, n_a, H, sdim, cdim, xf, 
         ax.set_xlim(stacked[:, :, 0].min() - margin, stacked[:, :, 0].max() + margin)
         ax.set_ylim(stacked[:, :, 1].min() - margin, stacked[:, :, 1].max() + margin)
 
-    lines, points = [], []
+    # One (trajectory, line, point) per animated method and agent.
+    tracks = []
+    for m in methods:
+        for i in range(n_a):
+            c = plot_style.agent_color(i)
+            line, = ax.plot([], [], color=c, **plot_style.method_style(m))
+            point, = ax.plot([], [], markers[m % len(markers)], color=c, markersize=6,
+                             markeredgecolor='black', markeredgewidth=0.5)
+            tracks.append((x_all[m][i], line, point))
     for i in range(n_a):
-        c = plot_style.agent_color(i)
-        line, = ax.plot([], [], color=c, **plot_style.method_style(0))
-        point, = ax.plot([], [], 'o', color=c, markersize=6,
-                         markeredgecolor='black', markeredgewidth=0.5)
-        lines.append(line)
-        points.append(point)
-        ax.scatter(xf[i, 0], xf[i, 1], marker='*', s=50, color=c,
+        ax.scatter(xf[i, 0], xf[i, 1], marker='*', s=50, color=plot_style.agent_color(i),
                    edgecolors='black', linewidths=0.3, alpha=0.6, zorder=4)
+    lines = [line for _, line, _ in tracks]
+    points = [point for _, _, point in tracks]
     time_text = ax.text(0.02, 0.95, '', transform=ax.transAxes, fontsize=11)
+
+    if show_legend:
+        handles = []
+        for m in range(len(x_all)):
+            dash = plot_style.method_style(m)['linestyle']
+            if m in methods:
+                handles.append(Line2D([0], [0], color='gray', linestyle=dash,
+                                      linewidth=plot_style.method_style(m)['linewidth'],
+                                      marker=markers[m % len(markers)], markersize=5,
+                                      markeredgecolor='black', markeredgewidth=0.5))
+            else:
+                # Grey at the lines' own alpha all but vanishes in a short handle.
+                handles.append(Line2D([0], [0], color='gray', linestyle=dash,
+                                      linewidth=1.0, alpha=0.35))
+        labels = list(method_labels[:len(x_all)])
+        # At the style's legend size, three marker handles overrun the plot box
+        # and wrap into a second row the strip has no room for; the tick-label
+        # size keeps them on one.
+        _legend_within_axes(ax, handles, labels, ncol, 1.4, loc='upper center',
+                            frameon=False, bbox_to_anchor=(0.5, -LEGEND_GAP / BOX),
+                            fontsize=plt.rcParams['font.size'],
+                            columnspacing=LEGEND_COLSPACE_PLAIN, handletextpad=0.4,
+                            borderaxespad=0.0)
 
     def init():
         """Clear every artist before the first frame."""
@@ -789,13 +849,12 @@ def animate_trajectories(result_nominal, result_others, n_a, H, sdim, cdim, xf, 
 
     def animate(frame):
         """Draw the path up to one timestep."""
-        for i in range(n_a):
-            lines[i].set_data(x_anim[i, :frame + 1, 0], x_anim[i, :frame + 1, 1])
-            points[i].set_data([x_anim[i, frame, 0]], [x_anim[i, frame, 1]])
+        for x, line, point in tracks:
+            line.set_data(x[:frame + 1, 0], x[:frame + 1, 1])
+            point.set_data([x[frame, 0]], [x[frame, 1]])
         time_text.set_text(f't = {frame * dt:.3f}s')
         return lines + points + [time_text]
 
-    fig.tight_layout()
     anim = FuncAnimation(fig, animate, init_func=init, frames=H + 1,
                          interval=100, blit=True)
     if save_path is not None:
